@@ -1,0 +1,155 @@
+---
+- hosts: all
+  remote_user: root
+  become: true
+  tasks:
+      - name: deal with proxmox7 bullseye  no-subscription repo
+        template:
+          src:  pve7.source.list
+          dest: /etc/apt/sources.list
+      - name: disable enterprise repo
+        lineinfile:
+          path: /etc/apt/sources.list.d/pve-enterprise.list
+          regexp: '^deb https://enterprise.proxmox.com/debian/pve bullseye pve-enterprise'
+          line:   '#deb https://enterprise.proxmox.com/debian/pve bullseye pve-enterprise'        
+      - name: update repo and dist-upgrade
+        become: true
+        apt:
+          upgrade: yes
+          update_cache: yes
+          cache_valid_time: 86400 
+      - name: install common packages
+        apt:
+          name: 
+            - htop 
+            - sysstat
+            - tmux
+            - ethtool
+            - iotop
+            - ioping
+            - fio
+            - iperf3
+            - unzip
+            - ledmon
+            - network-manager
+            - ansible 
+            - iftop
+            - net-tools
+            - dmidecode
+            - pve-zsync
+            - apcupsd
+            - zfs-zed
+            - curl
+            - snmpd
+            - apcupsd
+            - nfs-server
+            - lshw
+            - lldpd
+            - mtr-tiny
+            - dnsutils
+            - sudo
+            - nmap
+          state: latest
+
+      - name: root bash history with time record
+        template:
+          src:  root.bash_profile
+          dest: /root/.bash_profile
+
+      - name: pve-update-shell
+        template: 
+          src: pve-update.sh
+          dest: /root/pve-update.sh
+
+      - name: pve-daily-system-backup-shell
+        template:
+          src: daily-system-backup.sh
+          dest: /root/daily-system-backup.sh
+
+      - name: Creates a cron file under /etc/cron.d
+        cron:
+          name: daily-backup
+          month: "*"
+          day: "*"
+          weekday: "*"
+          minute: "0"
+          hour: "23"
+          user: root
+          job: "/bin/bash /root/daily-system-backup.sh"
+          cron_file: pve-daily-system-backup
+
+      - name: zfs-zed Config File 
+        template:
+          src: syps-zfs-zed.conf
+          dest: /etc/zfs/zed.d/zed.rc
+
+      - name: snmpd systemd service file
+        template:
+          src:  snmpd.service
+          dest: /lib/systemd/system/snmpd.service
+      - name: remote syslog server
+        template:
+          src: pve-loghost.conf
+          dest: /etc/rsyslog.d/loghost.conf
+
+      - name: snmpd Config File
+        template:
+          src: syps-snmpd.conf
+          dest: /etc/snmp/snmpd.conf
+
+      - name: nfs-server Config File
+        template:
+          src: nfs-export
+          dest: /etc/exports
+
+      - name: reload systemd service
+        systemd:
+          name: "{{ item }}"
+          state: restarted
+          daemon_reload: yes
+        with_items: 
+          - snmpd
+          - lldpd
+          - rsyslog
+          - zfs-zed
+          - cron
+       
+      - name: limited ZFS arc Memory usage
+        lineinfile:
+          path: /etc/modprobe.d/zfs.conf
+          line: '{{ item }}'
+          create: yes
+        with_items:
+          - 'options zfs zfs_arc_min=4294967296'
+          - 'options zfs zfs_arc_max=8589934592'
+
+      - name: update initramfs for ZFS arc limit
+        command: update-initramfs -k all -u
+
+- hosts: pvegroup_nfs
+  remote_user: root
+  become: true
+  tasks:
+      - name: Apcupsd Config File - NFS NODE
+        template:
+          src: syps-apcupsd-nfs.conf
+          dest: /etc/apcupsd/apcupsd.conf
+
+- hosts: pvegroup
+  remote_user: root
+  become: true
+  tasks: 
+      - name: Apcupsd Config File - Standard NODE
+        template: 
+          src: syps-apcupsd.conf
+          dest: /etc/apcupsd/apcupsd.conf
+
+- hosts: pvegroup pvegroup_nfs
+  remote_user: root
+  become: true
+  tasks: 
+      - name: restart apcupsd 
+        service: 
+          name: apcupsd
+          state: restarted
+
